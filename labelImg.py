@@ -45,6 +45,9 @@ from libs.yolo_io import TXT_EXT
 from libs.ustr import ustr
 from libs.version import __version__
 
+# import custom attributes module
+from customAttributes import AttributesManager
+
 __appname__ = 'labelImg'
 
 # Utility functions and classes.
@@ -89,7 +92,7 @@ class HashableQListWidgetItem(QListWidgetItem):
 class MainWindow(QMainWindow, WindowMixin):
     FIT_WINDOW, FIT_WIDTH, MANUAL_ZOOM = list(range(3))
 
-    def __init__(self, defaultFilename=None, defaultPrefdefClassFile=None, defaultSaveDir=None):
+    def __init__(self, defaultFilename=None, defaultPrefdefClassFile=None, defaultPrefdefLabelAttrsFile=None, defaultSaveDir=None):
         super(MainWindow, self).__init__()
         self.setWindowTitle(__appname__)
 
@@ -107,6 +110,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.mImgList = []
         self.dirname = None
         self.labelHist = []
+        self.labelAttrsHist = []
         self.lastOpenDir = None
 
         # Whether we need to save or not.
@@ -120,8 +124,11 @@ class MainWindow(QMainWindow, WindowMixin):
         # Load predefined classes to the list
         self.loadPredefinedClasses(defaultPrefdefClassFile)
 
+        # Load predefined label attributes to the list
+        self.loadPredefinedLabelAttributes(defaultPrefdefLabelAttrsFile)
+
         # Main widgets and related state.
-        self.labelDialog = LabelDialog(parent=self, listItem=self.labelHist)
+        self.labelDialog = LabelDialog(parent=self, listItem=self.labelHist, labelAttrs = self.labelAttrsHist)
 
         self.itemsToShapes = {}
         self.shapesToItems = {}
@@ -166,6 +173,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.dock = QDockWidget(u'Box Labels', self)
         self.dock.setObjectName(u'Labels')
         self.dock.setWidget(labelListContainer)
+        self.attributes_manager = AttributesManager( self, Qt.RightDockWidgetArea, defaultLabelAttrs=self.labelAttrsHist )
 
         # Tzutalin 20160906 : Add file list and dock to move faster
         self.fileListWidget = QListWidget()
@@ -563,6 +571,9 @@ class MainWindow(QMainWindow, WindowMixin):
         self.itemsToShapes.clear()
         self.shapesToItems.clear()
         self.labelList.clear()
+
+        self.attributes_manager.resetState()
+
         self.filePath = None
         self.imageData = None
         self.labelFile = None
@@ -738,11 +749,12 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def loadLabels(self, shapes):
         s = []
-        for label, points, line_color, fill_color, difficult in shapes:
+        for label, points, line_color, fill_color, difficult, attributes in shapes:
             shape = Shape(label=label)
             for x, y in points:
                 shape.addPoint(QPointF(x, y))
             shape.difficult = difficult
+            shape.attributes = attributes
             shape.close()
             s.append(shape)
 
@@ -772,17 +784,20 @@ class MainWindow(QMainWindow, WindowMixin):
                         fill_color=s.fill_color.getRgb(),
                         points=[(p.x(), p.y()) for p in s.points],
                        # add chris
-                        difficult = s.difficult)
+                        difficult = s.difficult,
+                        attributes = s.attributes)
+
 
         shapes = [format_shape(shape) for shape in self.canvas.shapes]
-        # Can add differrent annotation formats here
+        # Can add different annotation formats here
         try:
             if self.usingPascalVocFormat is True:
                 if ustr(annotationFilePath[-4:]) != ".xml":
                     annotationFilePath += XML_EXT
                 print ('Img: ' + self.filePath + ' -> Its xml: ' + annotationFilePath)
                 self.labelFile.savePascalVocFormat(annotationFilePath, shapes, self.filePath, self.imageData,
-                                                   self.lineColor.getRgb(), self.fillColor.getRgb())
+                                                   self.lineColor.getRgb(), self.fillColor.getRgb(), databaseSrc=None, image_attributes=self.attributes
+                                                   )
             elif self.usingYoloFormat is True:
                 if annotationFilePath[-4:] != ".txt":
                     annotationFilePath += TXT_EXT
@@ -810,6 +825,13 @@ class MainWindow(QMainWindow, WindowMixin):
             shape = self.itemsToShapes[item]
             # Add Chris
             self.diffcButton.setChecked(shape.difficult)
+            # print "{}".format(shape.attributes)
+            self.attributes_manager.loadLabelAttributes( shape.attributes )
+        # elif item:
+        #     shape = self.itemsToShapes[item]
+        #     self.attributes_manager.loadLabelAttributes( shape.attributes )
+        else:
+            self.attributes_manager.loadLabelAttributes( None )
 
     def labelItemChanged(self, item):
         shape = self.itemsToShapes[item]
@@ -830,7 +852,7 @@ class MainWindow(QMainWindow, WindowMixin):
         if not self.useDefaultLabelCheckbox.isChecked() or not self.defaultLabelTextLine.text():
             if len(self.labelHist) > 0:
                 self.labelDialog = LabelDialog(
-                    parent=self, listItem=self.labelHist)
+                    parent=self, listItem=self.labelHist, labelAttrs = self.labelAttrsHist)
 
             # Sync single class mode from PR#106
             if self.singleClassMode.isChecked() and self.lastLabel:
@@ -1384,6 +1406,15 @@ class MainWindow(QMainWindow, WindowMixin):
                         self.labelHist = [line]
                     else:
                         self.labelHist.append(line)
+    def loadPredefinedLabelAttributes(self, predefLabelAttrsFile):
+        if os.path.exists(predefLabelAttrsFile) is True:
+            with codecs.open(predefLabelAttrsFile, 'r', 'utf8') as f:
+                for line in f:
+                    line = line.strip()
+                    if self.labelAttrsHist is None:
+                        self.labelAttrsHist = [line]
+                    else:
+                        self.labelAttrsHist.append(line)
 
     def loadPascalXMLByFilename(self, xmlPath):
         if self.filePath is None:
@@ -1397,6 +1428,7 @@ class MainWindow(QMainWindow, WindowMixin):
         shapes = tVocParseReader.getShapes()
         self.loadLabels(shapes)
         self.canvas.verified = tVocParseReader.verified
+        # self.attributes_manager.loadImageAttributes( tVocParseReader.getAttributes() )
 
     def loadYOLOTXTByFilename(self, txtPath):
         if self.filePath is None:
@@ -1440,9 +1472,15 @@ def get_main_app(argv=[]):
     # Usage : labelImg.py image predefClassFile saveDir
     win = MainWindow(argv[1] if len(argv) >= 2 else None,
                      argv[2] if len(argv) >= 3 else os.path.join(
-                         os.path.dirname(sys.argv[0]),
-                         'data', 'predefined_classes.txt'),
-                     argv[3] if len(argv) >= 4 else None)
+                         os.path.dirname(sys.argv[0]), # classnames default path
+                         'data', 'predefined_classes.txt'
+                        ),
+                        os.path.join(
+                         os.path.dirname(sys.argv[0]), # label attributes default
+                         'data', 'predefined_label_attributes.txt'
+                        ),
+                     argv[3] if len(argv) >= 4 else None 
+                     )
     win.show()
     return app, win
 

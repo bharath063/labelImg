@@ -7,13 +7,15 @@ except ImportError:
     from PyQt4.QtCore import *
 
 from libs.lib import newIcon, labelValidator
+#TODO Add label attributes to LabelDialog
+from libs.attributes import AttributesWidgets
 
 BB = QDialogButtonBox
 
 
 class LabelDialog(QDialog):
 
-    def __init__(self, text="Enter object label", parent=None, listItem=None):
+    def __init__(self, text="Enter object label", parent=None, listItem=None, labelAttrs=None):
         super(LabelDialog, self).__init__(parent)
 
         self.edit = QLineEdit()
